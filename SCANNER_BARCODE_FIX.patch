@@ -1,0 +1,104 @@
+--- a/src/modules/scanner.ts
++++ b/src/modules/scanner.ts
+@@ -282,16 +282,19 @@
+     return;
+   }
+ 
++  // در Android WebView، Html5Qrcode اولویت دارد؛ BarcodeDetector ممکن است
++  // موجود باشد اما عملاً نتواند فریم‌های دوربین را decode کند.
++  // در صورت نبودن/شکست موتور HTML5، موتور بومی به‌عنوان جایگزین اجرا می‌شود.
++  if (typeof (window as any).Html5Qrcode !== 'undefined') {
++    const html5Ok = await tryStartHtml5();
++    if (html5Ok) return;
++  }
++
+   const nativeOk = await tryStartNative();
+   if (nativeOk) return;
+ 
+-  if (typeof (window as any).Html5Qrcode !== 'undefined') {
+-    await tryStartHtml5();
+-    return;
+-  }
+-
+   toast(
+-    'موتور اسکن بارکد لود نشده. از بارکدخوان USB/Bluetooth یا ورود دستی استفاده کنید',
++    'موتور اسکن بارکد در دسترس نیست. از بارکدخوان USB/Bluetooth یا ورود دستی استفاده کنید',
+     'error'
+   );
+   document.getElementById('manualBarcode')?.focus();
+@@ -413,26 +416,8 @@
+ 
+       nativeBusy = true;
+       try {
+-        let source: HTMLVideoElement | HTMLCanvasElement = video;
+-
+-        // برش نوار میانی برای تمرکز روی بارکد خطی
+-        try {
+-          const vw = video.videoWidth;
+-          const vh = video.videoHeight;
+-          if (vw > 0 && vh > 0 && nativeCtx && nativeCanvas) {
+-            const cropH = Math.max(80, Math.floor(vh * 0.32));
+-            const cropY = Math.floor((vh - cropH) / 2);
+-            const targetW = Math.min(960, vw);
+-            const scale = targetW / vw;
+-            const targetH = Math.floor(cropH * scale);
+-            if (nativeCanvas.width !== targetW) nativeCanvas.width = targetW;
+-            if (nativeCanvas.height !== targetH) nativeCanvas.height = targetH;
+-            nativeCtx.drawImage(video, 0, cropY, vw, cropH, 0, 0, targetW, targetH);
+-            source = nativeCanvas;
+-          }
+-        } catch {
+-          source = video;
+-        }
++        // کل فریم بررسی می‌شود؛ برش نواری می‌تواند بارکد خارج از مرکز را حذف کند.
++        const source: HTMLVideoElement = video;
+ 
+         const found = await nativeDetector!.detect(source);
+         if (found?.length) {
+@@ -457,9 +442,9 @@
+   }
+ }
+ 
+-async function tryStartHtml5(): Promise<void> {
++async function tryStartHtml5(): Promise<boolean> {
+   const Html5Qrcode = (window as any).Html5Qrcode;
+-  if (!Html5Qrcode || !opts) return;
++  if (!Html5Qrcode || !opts) return false;
+ 
+   try {
+     if (!html5Instance) {
+@@ -482,24 +467,29 @@
+     await html5Instance.start(
+       { facingMode: 'environment' },
+       {
+-        fps: 10,
+-        qrbox: { width: 280, height: 120 },
++        fps: 12,
+         formatsToSupport: formats,
+-        aspectRatio: 1.777,
+       },
+       (decoded: string) => {
+         if (shouldAcceptScan(decoded)) emitScan(decoded, 'html5');
+       },
+       () => {}
+     );
++    return true;
+   } catch (err: any) {
+     console.error('[scanner] html5 failed', err);
+     const name = err?.name || '';
+     if (name === 'NotAllowedError') {
+       toast('مجوز دوربین رد شد', 'error');
+     } else {
+-      toast('راه‌اندازی دوربین ناموفق بود — ورود دستی یا USB را امتحان کنید', 'error');
+-    }
++      toast('راه‌اندازی موتور اسکن HTML5 ناموفق بود؛ تلاش با موتور جایگزین…', 'info');
++    }
++    try {
++      if (html5Instance?.isScanning) await html5Instance.stop();
++    } catch {
++      // ignore cleanup errors
++    }
++    return false;
+   }
+ }
+ 
